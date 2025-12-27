@@ -21,13 +21,15 @@ FEATURES = [
     "evse_longitude",
     "Pool_SiteType",
     "population_1km",
+    "Trafic",
+    "Oprit",
     "osm_office_any_500m",
     "osm_shop_any_500m",
     "competitors_fast_500m",
 ]
 
 TARGET = "sessions_per_day"
-CAT_FEATURES = ["Pool_SiteType"]
+CAT_FEATURES = ["Pool_SiteType", "Oprit"]  # Trafic is numeric!
 
 RANDOM_SEED = 42
 
@@ -49,11 +51,13 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     if df[TARGET].isna().any():
         raise ValueError("Target sessions_per_day bevat NaN-waarden")
 
-    # numerieke features
+    # categorical features -> always string
+    for c in CAT_FEATURES:
+        df[c] = df[c].fillna("Unknown").astype(str)
+
+    # numeric features -> numeric
     for col in FEATURES:
-        if col == "Pool_SiteType":
-            df[col] = df[col].fillna("Unknown").astype(str)
-        else:
+        if col not in CAT_FEATURES:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
     if len(df) < 30:
@@ -96,7 +100,12 @@ def cross_val_mae_weighted(df: pd.DataFrame, n_splits=5, low_q=0.10, high_q=0.90
     X = df[FEATURES]
     y = df[TARGET].values
 
-    w_all, q_low, q_high = make_sample_weights(df[TARGET], low_q=low_q, high_q=high_q, outlier_weight=outlier_weight)
+    w_all, q_low, q_high = make_sample_weights(
+        df[TARGET],
+        low_q=low_q,
+        high_q=high_q,
+        outlier_weight=outlier_weight,
+    )
 
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=RANDOM_SEED)
     maes = []
@@ -114,7 +123,13 @@ def cross_val_mae_weighted(df: pd.DataFrame, n_splits=5, low_q=0.10, high_q=0.90
         maes.append(mae)
         print(f"Fold {fold}: MAE = {mae:.3f}")
 
-    return float(np.mean(maes)), maes, {"low_q": low_q, "high_q": high_q, "outlier_weight": outlier_weight, "q_low": q_low, "q_high": q_high}
+    return float(np.mean(maes)), maes, {
+        "low_q": low_q,
+        "high_q": high_q,
+        "outlier_weight": outlier_weight,
+        "q_low": q_low,
+        "q_high": q_high,
+    }
 
 
 # =========================
@@ -144,7 +159,12 @@ def main():
     print("\n🧪 Hold-out evaluatie (sanity check, weighted training):")
     X = df[FEATURES]
     y = df[TARGET]
-    weights, q_low, q_high = make_sample_weights(df[TARGET], low_q=LOW_Q, high_q=HIGH_Q, outlier_weight=OUTLIER_WEIGHT)
+    weights, q_low, q_high = make_sample_weights(
+        df[TARGET],
+        low_q=LOW_Q,
+        high_q=HIGH_Q,
+        outlier_weight=OUTLIER_WEIGHT,
+    )
 
     X_train, X_test, y_train, y_test, w_train, w_test = train_test_split(
         X, y, weights, test_size=0.2, random_state=RANDOM_SEED
