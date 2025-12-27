@@ -51,7 +51,6 @@ def load_osm_cache_and_path():
     try:
         return json.loads(OSM_CACHE_PATH.read_text()), OSM_CACHE_PATH
     except Exception:
-        # corrupted json etc.
         return {}, OSM_CACHE_PATH
 
 # -----------------------
@@ -73,10 +72,6 @@ def competitors_fast_500m(lat: float, lon: float, tree: BallTree) -> int:
     return int(tree.query_radius(pt, r=r_rad, count_only=True)[0])
 
 def overpass_office_shop_counts_500m(lat: float, lon: float) -> tuple[int, int]:
-    """
-    1 Overpass-call: telt office_any en shop_any binnen 500m.
-    Returns: (office_count, shop_count)
-    """
     query = f"""
     [out:json][timeout:90];
     (
@@ -96,7 +91,7 @@ def overpass_office_shop_counts_500m(lat: float, lon: float) -> tuple[int, int]:
     """
 
     backoff = 5
-    for attempt in range(1, 7):  # max 6 tries
+    for attempt in range(1, 7):
         try:
             r = requests.post(OVERPASS_URL, data={"data": query}, timeout=120)
             if r.status_code in (429, 504):
@@ -119,11 +114,6 @@ def overpass_office_shop_counts_500m(lat: float, lon: float) -> tuple[int, int]:
             backoff = min(backoff * 2, 60)
 
 def osm_counts_500m(lat: float, lon: float, cache: dict, cache_path: Path) -> tuple[int, int, bool]:
-    """
-    Cache-first.
-    Bij cache-miss: Overpass fetch + write to cache.
-    Returns: (office_cnt, shop_cnt, from_cache)
-    """
     key = f"{lat:.5f}|{lon:.5f}|r500"
 
     if key in cache:
@@ -136,7 +126,6 @@ def osm_counts_500m(lat: float, lon: float, cache: dict, cache_path: Path) -> tu
     try:
         cache_path.write_text(json.dumps(cache))
     except Exception:
-        # if write fails, still return values
         pass
 
     return int(office_cnt), int(shop_cnt), False
@@ -147,18 +136,50 @@ def osm_counts_500m(lat: float, lon: float, cache: dict, cache_path: Path) -> tu
 
 model, meta = load_model_and_meta()
 features = meta["features"]
-cat_features = meta["cat_features"]  # not required for predict but kept for completeness
+
+# optional: if you added this in training later
+cat_levels = meta.get("cat_levels", {})
 
 pop_map = load_pop_map()
 competitor_tree = load_competitor_tree()
-
 geolocator = Nominatim(user_agent="ev-sessions-bellade")
 
 # -----------------------
 # UI
 # -----------------------
 
-site_type = st.selectbox("Site type", ["Store", "Office building", "Parking area", "Unknown"])
+# SiteType options: prefer meta values if they exist, else fallback
+default_site_types = ["Store", "Office building", "Parking area", "Unknown"]
+site_type_options = cat_levels.get("Pool_SiteType", default_site_types)
+site_type = st.selectbox("Site type", site_type_options)
+
+# New optional dropdowns: only show if the model expects them
+oprit_value = None
+trafic_value = None
+if "Trafic" in features:
+    # Bepaal min/max op basis van je training data (veilig fallback)
+    try:
+        df_ref = pd.read_csv("data/mvp_train_enriched_500m_comp.csv")
+        t_min = int(pd.to_numeric(df_ref["Trafic"], errors="coerce").dropna().min())
+        t_max = int(pd.to_numeric(df_ref["Trafic"], errors="coerce").dropna().max())
+        t_med = int(pd.to_numeric(df_ref["Trafic"], errors="coerce").dropna().median())
+    except Exception:
+        t_min, t_max, t_med = 0, 20, 10  # fallback
+        
+
+    trafic_value = st.slider(
+        "Trafic",
+        min_value=t_min,
+        max_value=t_max,
+        value=t_med,
+        step=1,
+        help="Numerieke verkeersscore (hoger = drukker)."
+    )
+
+if "Oprit" in features:
+    oprit_options = cat_levels.get("Oprit", ["Yes", "No", "Unknown"])
+    oprit_value = st.selectbox("Oprit", oprit_options)
+
 address = st.text_input("Adres (België)", placeholder="Bijv. Berlaarsestraat 65, Lier")
 
 if st.button("Voorspel"):
@@ -173,14 +194,13 @@ if st.button("Voorspel"):
 
     lat, lon = float(loc.latitude), float(loc.longitude)
 
-    # Load cache fresh (because we can write to it)
     osm_cache, osm_cache_path = load_osm_cache_and_path()
 
-    # Feature engineering
     pop = population_1km(lat, lon, pop_map)
     comp = competitors_fast_500m(lat, lon, competitor_tree)
     office_cnt, shop_cnt, from_cache = osm_counts_500m(lat, lon, osm_cache, osm_cache_path)
 
+    # Base features always present in your model
     row = {
         "evse_latitude": lat,
         "evse_longitude": lon,
@@ -191,8 +211,19 @@ if st.button("Voorspel"):
         "competitors_fast_500m": comp,
     }
 
-    # Align to training feature order
-    X = pd.DataFrame([row])[features]
+    # Add optional new features if required by the trained model
+    if "Trafic" in features:
+        row["Trafic"] = trafic_value if trafic_value is not None else "Unknown"
+    if "Oprit" in features:
+        row["Oprit"] = oprit_value if oprit_value is not None else "Unknown"
+
+    # Align columns exactly to training feature order
+    X = pd.DataFrame([row])
+    for col in features:
+        if col not in X.columns:
+            # safe fallback if training expects a column not set in row
+            X[col] = "Unknown" if col in ("Pool_SiteType", "Trafic", "Oprit") else 0.0
+    X = X[features]
 
     pred = float(model.predict(X)[0])
 
@@ -207,6 +238,12 @@ if st.button("Voorspel"):
     st.write(f"- Bevolking (1 km²): {pop}")
     st.write(f"- Kantoren (OSM) binnen 500m: {office_cnt}")
     st.write(f"- Shops (OSM) binnen 500m: {shop_cnt}")
+
+    # Only show if used
+    if "Trafic" in features:
+        st.write(f"- Trafic: {row.get('Trafic')}")
+    if "Oprit" in features:
+        st.write(f"- Oprit: {row.get('Oprit')}")
 
     if not from_cache:
         st.info("OSM office/shop werden live opgehaald (cache-miss) en zijn nu gecached voor volgende keer.")
