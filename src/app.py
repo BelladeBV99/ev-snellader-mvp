@@ -223,7 +223,7 @@ if st.button("Voorspel"):
         st.error("Vul een adres in.")
         st.stop()
 
-lat, lon, provider = geocode_address(address)
+    lat, lon, provider = geocode_address(address)
 
 if lat is None:
     st.error(
