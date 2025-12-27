@@ -7,3 +7,5 @@ joblib
 geopy
 pyproj
 requests
+
+pyproj==3.6.1
