@@ -225,16 +225,21 @@ if st.button("Voorspel"):
 
     lat, lon, provider = geocode_address(address)
 
-if lat is None:
-    st.error(
-        "Adres kon niet opgezocht worden (geocoder tijdelijk onbereikbaar). "
-        "Probeer opnieuw of geef straat + nummer + gemeente."
-    )
-    st.stop()
+    if lat is None or lon is None:
+        st.error(
+            "Adres kon niet opgezocht worden (geocoder tijdelijk onbereikbaar). "
+            "Probeer opnieuw of geef straat + nummer + gemeente."
+        )
+        st.stop()
 
-st.caption(f"Geocoding via: {provider}")
+    st.caption(f"Geocoding via: {provider}")
 
-    lat, lon = float(loc.latitude), float(loc.longitude)
+    # vanaf hier ga je verder met je bestaande feature engineering:
+    osm_cache, osm_cache_path = load_osm_cache_and_path()
+    pop = population_1km(lat, lon, pop_map)
+    office_cnt, shop_cnt, from_cache = osm_counts_500m(lat, lon, osm_cache, osm_cache_path)
+    # ...
+
 
     osm_cache, osm_cache_path = load_osm_cache_and_path()
 
