@@ -1,9 +1,9 @@
-streamlit
-pandas
-numpy
-catboost
-scikit-learn
-joblib
-geopy
+streamlit==1.41.1
+pandas==2.2.3
+numpy<2
+scikit-learn==1.5.2
+joblib==1.4.2
+requests==2.32.5
+geopy==2.4.1
 pyproj==3.6.1
-requests
+catboost==1.2.7
