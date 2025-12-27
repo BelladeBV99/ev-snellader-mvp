@@ -1,8 +1,9 @@
+streamlit
 pandas
 numpy
-openpyxl
-scikit-learn
 catboost
-streamlit
-geopy
+scikit-learn
 joblib
+geopy
+pyproj
+requests
