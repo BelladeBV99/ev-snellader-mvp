@@ -7,7 +7,8 @@ import pandas as pd
 import requests
 import streamlit as st
 from catboost import CatBoostRegressor
-from geopy.geocoders import Nominatim
+from geopy.geocoders import Nominatim, ArcGIS
+from geopy.exc import GeocoderUnavailable, GeocoderTimedOut, GeocoderServiceError
 from joblib import load
 from pyproj import Transformer
 from sklearn.neighbors import BallTree
@@ -142,8 +143,43 @@ cat_levels = meta.get("cat_levels", {})
 
 pop_map = load_pop_map()
 competitor_tree = load_competitor_tree()
-geolocator = Nominatim(user_agent="ev-sessions-bellade")
 
+@st.cache_resource
+def get_geocoders():
+    nom = Nominatim(user_agent="bellade-ev-sessions/1.0", timeout=10)
+    arc = ArcGIS(timeout=10)
+    return nom, arc
+
+nominatim, arcgis = get_geocoders()
+
+def geocode_address(address: str):
+    query = address.strip() + ", Belgium"
+
+    # 1) Nominatim retries
+    backoff = 1.5
+    for _ in range(3):
+        try:
+            loc = nominatim.geocode(query)
+            if loc:
+                return float(loc.latitude), float(loc.longitude), "Nominatim"
+            break
+        except (GeocoderUnavailable, GeocoderTimedOut, GeocoderServiceError):
+            time.sleep(backoff)
+            backoff *= 2
+
+    # 2) ArcGIS fallback retries
+    backoff = 1.5
+    for _ in range(3):
+        try:
+            loc = arcgis.geocode(query)
+            if loc:
+                return float(loc.latitude), float(loc.longitude), "ArcGIS"
+            break
+        except (GeocoderUnavailable, GeocoderTimedOut, GeocoderServiceError):
+            time.sleep(backoff)
+            backoff *= 2
+
+    return None, None, None
 # -----------------------
 # UI
 # -----------------------
@@ -187,10 +223,16 @@ if st.button("Voorspel"):
         st.error("Vul een adres in.")
         st.stop()
 
-    loc = geolocator.geocode(address + ", Belgium")
-    if loc is None:
-        st.error("Adres niet gevonden. Probeer straat + nummer + stad.")
-        st.stop()
+lat, lon, provider = geocode_address(address)
+
+if lat is None:
+    st.error(
+        "Adres kon niet opgezocht worden (geocoder tijdelijk onbereikbaar). "
+        "Probeer opnieuw of geef straat + nummer + gemeente."
+    )
+    st.stop()
+
+st.caption(f"Geocoding via: {provider}")
 
     lat, lon = float(loc.latitude), float(loc.longitude)
 
